@@ -1,0 +1,16 @@
+export const TRADES=['Carpenter','Steel Fixer','Mason','Helper','Scaffolder','Rigger'];
+export const clean=v=>String(v??'').trim().replace(/\s+/g,' ');
+export function validate(data){
+ if(!data||data.schemaVersion!==1||!Array.isArray(data.records)||!Array.isArray(data.villas))throw Error('Unexpected API response. Use the supplied Apps Script.');
+ return {...data,records:data.records.map(r=>{
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!Array.isArray(r.manDays)||r.manDays.length!==6)throw Error('Invalid date or manpower structure in source data.');
+  return {id:clean(r.id),date:r.date,cluster:clean(r.cluster),villa:clean(r.villa),area:clean(r.area),activity:clean(r.activity),engineer:clean(r.engineer),manDays:r.manDays.map(v=>v===null?null:Number.isFinite(Number(v))?Number(v):null)};
+ }),villas:data.villas.map(v=>({id:clean(v.id),cluster:clean(v.cluster)}))};
+}
+export const amount=(r,trade='')=>r.manDays.reduce((s,n,i)=>s+((!trade||TRADES[i]===trade)&&Number.isFinite(n)?n:0),0);
+export function filterRows(rows,f){return rows.filter(r=>(!f.from||r.date>=f.from)&&(!f.to||r.date<=f.to)&&['cluster','villa','area','activity','engineer'].every(k=>!f[k]||r[k]===f[k])&&(!f.trade||amount(r,f.trade)!==0));}
+export function group(rows,key,trade=''){const m=new Map();for(const r of rows)m.set(r[key]||'Unassigned',(m.get(r[key]||'Unassigned')||0)+amount(r,trade));return [...m].sort((a,b)=>b[1]-a[1]);}
+export function quality(rows){const ids=new Set(),keys=new Set();let duplicateIds=0,repeated=0;for(const r of rows){if(r.id&&ids.has(r.id))duplicateIds++;ids.add(r.id);if(r.villa){const k=JSON.stringify([r.date,r.villa,r.activity]);if(keys.has(k))repeated++;keys.add(k);}}return [['Repeated log IDs',duplicateIds],['Repeated date / villa / activity',repeated],['Missing reporter',rows.filter(r=>!r.engineer).length],['Zero recorded man-days',rows.filter(r=>r.manDays.every(n=>n===0)).length],['Invalid / negative labour values',rows.filter(r=>r.manDays.some(n=>n===null||n<0)).length],['Missing villa outside General',rows.filter(r=>!r.villa&&r.cluster!=='GEN').length]];}
+export function datesBetween(from,to){const dates=[];if(!from||!to||from>to)return dates;for(let d=new Date(from+'T00:00:00Z');d.toISOString().slice(0,10)<=to&&dates.length<3660;d.setUTCDate(d.getUTCDate()+1))dates.push(d.toISOString().slice(0,10));return dates;}
+export const csvCell=v=>'"'+String(v??'').replace(/^[=+@\-\t\r]/,"'$&").replace(/"/g,'""')+'"';
+export function demoData(){const villas=[],records=[];for(const cluster of ['CL-18','CL-19'])for(let i=1;i<=12;i++)villas.push({id:cluster+'-DEMO-'+String(i).padStart(3,'0'),cluster});for(let day=1;day<=14;day++)for(let i=0;i<18;i++){const v=villas[(i+day)%villas.length];records.push({id:`demo-${day}-${i}`,date:`2026-09-${String(day).padStart(2,'0')}`,cluster:v.cluster,villa:v.id,area:['Substructure','Superstructure','Internal finishes'][i%3],activity:['Foundation steel','Slab formwork','Blockwork'][i%3],engineer:['Demo team A','Demo team B','Demo team C'][i%3],manDays:[i%3===1?2+i%4:0,i%3===0?3:0,i%3===2?2:0,1+(i%2)*.5,i%5===0?1:0,i%9===0?.5:0]});}return {schemaVersion:1,generatedAt:null,records,villas,notes:['Synthetic demonstration data — not your project records.']};}
