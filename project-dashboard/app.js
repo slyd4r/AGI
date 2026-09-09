@@ -125,7 +125,7 @@
         return;
       }
 
-      const callbackName = `__qtySheetResponse_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const callbackName = `__dailyProgressResponse_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const script = document.createElement("script");
       let timeoutId;
 
@@ -143,14 +143,14 @@
             ?.map((error) => error.message || error.detailed_message)
             .filter(Boolean)
             .join(" ");
-          reject(new Error(message || "Google did not return readable QTY_Sheet data."));
+          reject(new Error(message || "Google did not return readable Daily_Progress_Log data."));
           return;
         }
         resolve(response.table);
       };
 
       const params = new URLSearchParams({
-        sheet: config.sheetName || "QTY_Sheet",
+        sheet: config.sheetName || "Daily_Progress_Log",
         headers: String(config.headers ?? 1),
         tq: query,
         tqx: `out:json;responseHandler:${callbackName};reqId:${Date.now()}`,
@@ -161,11 +161,11 @@
       script.async = true;
       script.onerror = () => {
         cleanup();
-        reject(new Error("QTY_Sheet did not respond. Check its name and sharing settings."));
+        reject(new Error("Daily_Progress_Log did not respond. Check its name and sharing settings."));
       };
       timeoutId = window.setTimeout(() => {
         cleanup();
-        reject(new Error("The QTY_Sheet request timed out."));
+        reject(new Error("The Daily_Progress_Log request timed out."));
       }, 18000);
 
       state.activeScripts.add(script);
@@ -220,6 +220,14 @@
 
     const roleDefinitions = [
       {
+        role: "date",
+        patterns: [
+          { pattern: /^date$/, weight: 120 },
+          { pattern: /^update date$|^record date$|^report date$/, weight: 110 },
+          { pattern: /^timestamp$/, weight: 90 },
+        ],
+      },
+      {
         role: "cluster",
         patterns: [
           { pattern: /^cluster$/, weight: 100 },
@@ -266,8 +274,9 @@
         role: "activity",
         patterns: [
           { pattern: /^activity$/, weight: 120 },
-          { pattern: /assigned activity|activity name|work activity/, weight: 110 },
-          { pattern: /\bactivity\b/, weight: 90 },
+          { pattern: /^activities$/, weight: 120 },
+          { pattern: /assigned activit(?:y|ies)|activity name|work activit(?:y|ies)/, weight: 110 },
+          { pattern: /\bactivit(?:y|ies)\b/, weight: 90 },
           { pattern: /^task$|task name/, weight: 80 },
           { pattern: /work item|work description/, weight: 75 },
           { pattern: /^description$/, weight: 55 },
@@ -295,10 +304,10 @@
     });
 
     if (!selected.some((column) => column.role === "activity")) {
-      throw new Error("No Activity column was found in QTY_Sheet.");
+      throw new Error("No Activity column was found in Daily_Progress_Log.");
     }
     if (!selected.some((column) => column.role === "manday")) {
-      throw new Error("No manday or recognised trade columns were found in QTY_Sheet.");
+      throw new Error("No manday or recognised trade columns were found in Daily_Progress_Log.");
     }
     return selected;
   }
@@ -368,7 +377,7 @@
     elements.refreshButton.disabled = loading;
     elements.refreshButton.classList.toggle("is-loading", loading);
     if (loading) {
-      elements.syncStatus.textContent = "Loading QTY_Sheet…";
+      elements.syncStatus.textContent = "Loading Daily_Progress_Log…";
       elements.syncDot.classList.remove("is-live", "is-error");
     }
   }
@@ -411,7 +420,7 @@
         timeZone: config.timeZone || undefined,
       }).format(new Date())}`;
     } catch (error) {
-      showError(error.message || "QTY_Sheet could not be read.");
+      showError(error.message || "Daily_Progress_Log could not be read.");
     } finally {
       setLoading(false);
     }
@@ -426,12 +435,12 @@
     elements.recordSummary.textContent = "No assignment data loaded";
     elements.syncDot.classList.remove("is-live");
     elements.syncDot.classList.add("is-error");
-    elements.syncStatus.textContent = "QTY_Sheet unavailable";
+    elements.syncStatus.textContent = "Daily_Progress_Log unavailable";
     renderKpis([
-      { label: "Assigned mandays", value: "—", note: "Waiting for QTY_Sheet", color: "#f58a07" },
-      { label: "Activities", value: "—", note: "Waiting for QTY_Sheet", color: "#0f8f83" },
-      { label: "Assignments", value: "—", note: "Waiting for QTY_Sheet", color: "#2f6fed" },
-      { label: "Locations", value: "—", note: "Waiting for QTY_Sheet", color: "#7b61c9" },
+      { label: "Assigned mandays", value: "—", note: "Waiting for Daily_Progress_Log", color: "#f58a07" },
+      { label: "Activities", value: "—", note: "Waiting for Daily_Progress_Log", color: "#0f8f83" },
+      { label: "Assignments", value: "—", note: "Waiting for Daily_Progress_Log", color: "#2f6fed" },
+      { label: "Locations", value: "—", note: "Waiting for Daily_Progress_Log", color: "#7b61c9" },
     ]);
   }
 
@@ -509,7 +518,7 @@
     elements.clearFilters.hidden = !hasFilters;
     elements.recordSummary.textContent = hasFilters
       ? `${formatNumber(state.filteredRows.length, 0)} of ${formatNumber(state.rows.length, 0)} assignments shown`
-      : `${formatNumber(state.rows.length, 0)} assignments loaded from QTY_Sheet`;
+      : `${formatNumber(state.rows.length, 0)} assignments loaded from Daily_Progress_Log`;
     renderDashboard();
   }
 
@@ -563,7 +572,7 @@
       {
         label: "Assignment rows",
         value: formatNumber(state.filteredRows.length, 0),
-        note: "Visible QTY_Sheet entries",
+        note: "Visible Daily_Progress_Log entries",
         color: "#2f6fed",
       },
       {
