@@ -2,31 +2,45 @@
   "use strict";
 
   const config = window.DASHBOARD_CONFIG || {};
-  const PAGE_SIZE = 12;
-  const CHART_COLORS = ["#0f8f83", "#2f6fed", "#f58a07", "#d84a4a", "#7b61c9", "#5b7083"];
+  const PAGE_SIZE = 15;
+  const CHART_COLORS = ["#0f8f83", "#2f6fed", "#f58a07", "#d84a4a", "#7b61c9", "#5b7083", "#16a085", "#8c6a2f"];
+  const SENSITIVE_LABEL = /(?:^|\s)(?:password|passwd|user|username|user name|role|credential|login|email|token|secret|pin|otp|authentication|auth code|access key|api key)(?:\s|$)/i;
+
+  const TRADE_DEFINITIONS = [
+    { label: "Carpenter", pattern: /\bcarpenter|carpentry\b/i },
+    { label: "Steel Fixer", pattern: /\bsteel fixer|steel fixing|rebar\b/i },
+    { label: "Mason", pattern: /\bmason|masonry\b/i },
+    { label: "Helper", pattern: /\bhelper|labou?rer\b/i },
+    { label: "Scaffolder", pattern: /\bscaffold(?:er|ing)?\b/i },
+    { label: "Rigger", pattern: /\brigger|rigging\b/i },
+    { label: "Flagman", pattern: /\bflagman|banksman\b/i },
+    { label: "Surveyor Assistant", pattern: /\bsurveyor assistant|survey assistant\b/i },
+  ];
 
   const state = {
+    selectedDefinitions: [],
     columns: [],
     rows: [],
     filteredRows: [],
     model: {},
     page: 1,
-    loadingScript: null,
-    timeoutId: null,
+    activeScripts: new Set(),
   };
 
   const elements = {
     title: document.getElementById("dashboard-title"),
-    sourceLink: document.getElementById("source-link"),
     syncStatus: document.getElementById("sync-status"),
     syncDot: document.querySelector(".sync-dot"),
     refreshButton: document.getElementById("refresh-button"),
     searchInput: document.getElementById("search-input"),
-    categoryWrap: document.getElementById("category-filter-wrap"),
-    categoryLabel: document.getElementById("category-filter-label"),
-    categoryFilter: document.getElementById("category-filter"),
-    statusWrap: document.getElementById("status-filter-wrap"),
-    statusFilter: document.getElementById("status-filter"),
+    activityWrap: document.getElementById("category-filter-wrap"),
+    activityLabel: document.getElementById("category-filter-label"),
+    activityFilter: document.getElementById("category-filter"),
+    locationWrap: document.getElementById("location-filter-wrap"),
+    locationLabel: document.getElementById("location-filter-label"),
+    locationFilter: document.getElementById("location-filter"),
+    tradeWrap: document.getElementById("trade-filter-wrap"),
+    tradeFilter: document.getElementById("trade-filter"),
     clearFilters: document.getElementById("clear-filters"),
     recordSummary: document.getElementById("record-summary"),
     errorPanel: document.getElementById("error-panel"),
@@ -34,14 +48,12 @@
     retryButton: document.getElementById("retry-button"),
     kpiGrid: document.getElementById("kpi-grid"),
     chartGrid: document.getElementById("chart-grid"),
-    statusChartTitle: document.getElementById("status-chart-title"),
-    statusChart: document.getElementById("status-chart"),
-    categoryChartTitle: document.getElementById("category-chart-title"),
-    categoryChart: document.getElementById("category-chart"),
-    trendPanel: document.getElementById("trend-panel"),
-    trendTitle: document.getElementById("trend-chart-title"),
-    trendCaption: document.getElementById("trend-caption"),
-    trendChart: document.getElementById("trend-chart"),
+    tradeChart: document.getElementById("status-chart"),
+    activityChart: document.getElementById("category-chart"),
+    locationPanel: document.getElementById("trend-panel"),
+    locationTitle: document.getElementById("trend-chart-title"),
+    locationCaption: document.getElementById("trend-caption"),
+    locationChart: document.getElementById("trend-chart"),
     tablePanel: document.getElementById("table-panel"),
     table: document.getElementById("data-table"),
     tableCount: document.getElementById("table-count"),
@@ -60,18 +72,42 @@
       .trim();
   }
 
-  function displayLabel(column, index) {
-    const label = String(column.label || "").trim();
-    return label || `Column ${index + 1}`;
+  function isSensitive(label) {
+    return SENSITIVE_LABEL.test(normaliseLabel(label));
   }
 
-  function formattedCell(row, index) {
+  function columnLetter(index) {
+    let number = index + 1;
+    let letters = "";
+    while (number > 0) {
+      const remainder = (number - 1) % 26;
+      letters = String.fromCharCode(65 + remainder) + letters;
+      number = Math.floor((number - 1) / 26);
+    }
+    return letters;
+  }
+
+  function formatNumber(value, maximumFractionDigits = 1) {
+    return new Intl.NumberFormat(config.locale || "en-GB", {
+      maximumFractionDigits,
+    }).format(Number.isFinite(value) ? value : 0);
+  }
+
+  function numberValue(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value !== "string") return null;
+    const cleaned = value.replace(/,/g, "").trim();
+    if (!cleaned) return null;
+    const number = Number(cleaned);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function displayCell(row, index) {
     const cell = row.cells[index];
     if (!cell || cell.value === null || cell.value === undefined || cell.value === "") return "—";
     if (cell.formatted !== null && cell.formatted !== undefined && cell.formatted !== "") {
       return String(cell.formatted);
     }
-    if (cell.value instanceof Date) return formatDate(cell.value, true);
     if (typeof cell.value === "number") return formatNumber(cell.value);
     if (typeof cell.value === "boolean") return cell.value ? "Yes" : "No";
     return String(cell.value);
@@ -79,320 +115,333 @@
 
   function rawCell(row, index) {
     if (index === null || index === undefined || index < 0) return null;
-    return row.cells[index] ? row.cells[index].value : null;
+    return row.cells[index]?.value ?? null;
   }
 
-  function formatNumber(value, maximumFractionDigits = 1) {
-    return new Intl.NumberFormat(config.locale || "en-GB", { maximumFractionDigits }).format(value);
-  }
+  function querySheet(query) {
+    return new Promise((resolve, reject) => {
+      if (!config.spreadsheetId) {
+        reject(new Error("The spreadsheet ID is missing."));
+        return;
+      }
 
-  function formatDate(value, includeYear) {
-    const date = value instanceof Date ? value : parseDate(value);
-    if (!date) return String(value || "—");
-    return new Intl.DateTimeFormat(config.locale || "en-GB", {
-      day: "2-digit",
-      month: "short",
-      year: includeYear ? "numeric" : undefined,
-      timeZone: config.timeZone || undefined,
-    }).format(date);
-  }
+      const callbackName = `__qtySheetResponse_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const script = document.createElement("script");
+      let timeoutId;
 
-  function parseDate(value) {
-    if (value instanceof Date && !Number.isNaN(value.valueOf())) return value;
-    if (typeof value === "number" && value > 20000 && value < 100000) {
-      return new Date(Date.UTC(1899, 11, 30) + value * 86400000);
-    }
-    if (typeof value !== "string" || !value.trim()) return null;
-    const match = value.match(/^Date\((\d+),(\d+),(\d+)(?:,(\d+),(\d+),(\d+))?\)$/);
-    if (match) {
-      return new Date(
-        Number(match[1]),
-        Number(match[2]),
-        Number(match[3]),
-        Number(match[4] || 0),
-        Number(match[5] || 0),
-        Number(match[6] || 0),
-      );
-    }
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.valueOf()) ? null : parsed;
-  }
+      const cleanup = () => {
+        window.clearTimeout(timeoutId);
+        delete window[callbackName];
+        state.activeScripts.delete(script);
+        script.remove();
+      };
 
-  function numberValue(value) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value !== "string") return null;
-    const cleaned = value.replace(/,/g, "").replace(/%/g, "").trim();
-    if (!cleaned) return null;
-    const number = Number(cleaned);
-    return Number.isFinite(number) ? number : null;
-  }
+      window[callbackName] = (response) => {
+        cleanup();
+        if (!response || response.status === "error" || !response.table) {
+          const message = response?.errors
+            ?.map((error) => error.message || error.detailed_message)
+            .filter(Boolean)
+            .join(" ");
+          reject(new Error(message || "Google did not return readable QTY_Sheet data."));
+          return;
+        }
+        resolve(response.table);
+      };
 
-  function findColumn(tokens, options = {}) {
-    const exactTokens = tokens.map(normaliseLabel);
-    let result = -1;
-    let bestScore = 0;
-
-    state.columns.forEach((column, index) => {
-      if (options.type && column.type !== options.type) return;
-      const label = normaliseLabel(column.label);
-      if (!label) return;
-      let score = 0;
-      exactTokens.forEach((token) => {
-        if (label === token) score = Math.max(score, 100 + token.length);
-        else if (label.startsWith(`${token} `) || label.endsWith(` ${token}`)) {
-          score = Math.max(score, 70 + token.length);
-        } else if (label.includes(token)) score = Math.max(score, 40 + token.length);
+      const params = new URLSearchParams({
+        sheet: config.sheetName || "QTY_Sheet",
+        headers: String(config.headers ?? 1),
+        tq: query,
+        tqx: `out:json;responseHandler:${callbackName};reqId:${Date.now()}`,
       });
-      if (score > bestScore) {
-        bestScore = score;
-        result = index;
-      }
+      script.src = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(
+        config.spreadsheetId,
+      )}/gviz/tq?${params.toString()}`;
+      script.async = true;
+      script.onerror = () => {
+        cleanup();
+        reject(new Error("QTY_Sheet did not respond. Check its name and sharing settings."));
+      };
+      timeoutId = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("The QTY_Sheet request timed out."));
+      }, 18000);
+
+      state.activeScripts.add(script);
+      document.head.appendChild(script);
     });
-    return result;
   }
 
-  function firstTextColumn(excluded) {
-    return state.columns.findIndex(
-      (column, index) => column.type === "string" && !excluded.includes(index),
-    );
+  function scoreLabel(label, patterns) {
+    const normalised = normaliseLabel(label);
+    let score = 0;
+    patterns.forEach(({ pattern, weight }) => {
+      if (pattern.test(normalised)) score = Math.max(score, weight);
+    });
+    return score;
   }
 
-  function detectModel() {
-    const dateIndex = (() => {
-      const labelled = findColumn(["update date", "record date", "date", "updated", "timestamp"]);
-      if (labelled >= 0) return labelled;
-      return state.columns.findIndex((column) => ["date", "datetime"].includes(column.type));
-    })();
-
-    const statusIndex = findColumn(["progress status", "task status", "status", "state"]);
-    const progressIndex = findColumn([
-      "progress %",
-      "progress",
-      "completion %",
-      "percent complete",
-      "% complete",
-      "actual %",
-    ]);
-    const actualIndex = findColumn(["actual quantity", "actual", "completed quantity", "done"]);
-    const totalIndex = findColumn(["total quantity", "total", "budget quantity", "planned quantity"]);
-    const remainingIndex = findColumn(["remaining quantity", "remaining", "balance"]);
-
-    const categoryPriority = [
-      "cluster",
-      "area",
-      "package",
-      "section",
-      "category",
-      "project",
-      "activity",
-      "villa",
-      "discipline",
-      "type",
-    ];
-    let categoryIndex = findColumn(categoryPriority);
-    if (categoryIndex < 0) categoryIndex = firstTextColumn([statusIndex, dateIndex]);
-
-    let identityIndex = findColumn(["villa", "activity", "task", "item", "name", "id", "reference"]);
-    if (identityIndex < 0) identityIndex = firstTextColumn([statusIndex, dateIndex, categoryIndex]);
-
-    return {
-      dateIndex,
-      statusIndex,
-      progressIndex,
-      actualIndex,
-      totalIndex,
-      remainingIndex,
-      categoryIndex,
-      identityIndex,
-    };
+  function chooseColumn(columns, patterns, usedIndexes) {
+    let best = null;
+    columns.forEach((column) => {
+      if (usedIndexes.has(column.originalIndex) || isSensitive(column.label)) return;
+      const score = scoreLabel(column.label, patterns);
+      if (score > 0 && (!best || score > best.score)) best = { column, score };
+    });
+    return best?.column || null;
   }
 
-  function normaliseStatus(value) {
-    const raw = String(value || "").trim();
-    if (!raw) return "Not specified";
-    const status = normaliseLabel(raw);
-    if (/complete|completed|done|finished|closed|approved/.test(status)) return "Complete";
-    if (/delay|delayed|overdue|late/.test(status)) return "Delayed";
-    if (/hold|blocked|suspend/.test(status)) return "On hold";
-    if (/progress|ongoing|started|active|working/.test(status)) return "In progress";
-    if (/not started|pending|planned|open|todo/.test(status)) return "Not started";
-    return raw.replace(/\b\w/g, (letter) => letter.toUpperCase());
-  }
+  function classifyMandayColumn(column) {
+    if (isSensitive(column.label)) return null;
+    const label = normaliseLabel(column.label);
+    if (!label) return null;
 
-  function rowProgress(row) {
-    const { progressIndex, actualIndex, totalIndex, statusIndex } = state.model;
-    if (progressIndex >= 0) {
-      const raw = numberValue(rawCell(row, progressIndex));
-      if (raw !== null) return Math.max(0, Math.min(100, raw <= 1.00001 ? raw * 100 : raw));
-    }
-    if (actualIndex >= 0 && totalIndex >= 0) {
-      const actual = numberValue(rawCell(row, actualIndex));
-      const total = numberValue(rawCell(row, totalIndex));
-      if (actual !== null && total !== null && total > 0) {
-        return Math.max(0, Math.min(100, (actual / total) * 100));
-      }
-    }
-    if (statusIndex >= 0) {
-      const status = normaliseStatus(rawCell(row, statusIndex));
-      if (status === "Complete") return 100;
-      if (status === "In progress") return 50;
-      return 0;
+    const isTotal = /\btotal\b/.test(label) && /\bman ?days?\b|\bmandays?\b/.test(label);
+    if (isTotal) return { ...column, role: "manday", kind: "total", displayLabel: "Total Mandays" };
+
+    const trade = TRADE_DEFINITIONS.find((definition) => definition.pattern.test(label));
+    if (trade) return { ...column, role: "manday", kind: "trade", displayLabel: trade.label };
+
+    if (/\bman ?days?\b|\bmandays?\b|\bassigned manpower\b|\bmanpower\b/.test(label)) {
+      return { ...column, role: "manday", kind: "generic", displayLabel: column.label };
     }
     return null;
   }
 
-  function rowStatus(row) {
-    if (state.model.statusIndex >= 0) {
-      return normaliseStatus(rawCell(row, state.model.statusIndex));
+  function selectSafeColumns(metadataColumns) {
+    const columns = metadataColumns.map((column, originalIndex) => ({
+      ...column,
+      originalIndex,
+      label: String(column.label || column.id || `Column ${originalIndex + 1}`).trim(),
+    }));
+    const used = new Set();
+    const selected = [];
+
+    const roleDefinitions = [
+      {
+        role: "cluster",
+        patterns: [
+          { pattern: /^cluster$/, weight: 100 },
+          { pattern: /\bcluster\b/, weight: 70 },
+        ],
+      },
+      {
+        role: "villa",
+        patterns: [
+          { pattern: /^villa$/, weight: 100 },
+          { pattern: /villa number|villa no|emaar number/, weight: 90 },
+          { pattern: /\bvilla\b/, weight: 70 },
+        ],
+      },
+      {
+        role: "area",
+        patterns: [
+          { pattern: /^area$/, weight: 100 },
+          { pattern: /work area|location area/, weight: 85 },
+          { pattern: /\barea\b/, weight: 65 },
+        ],
+      },
+      {
+        role: "section",
+        patterns: [{ pattern: /^section$|work section/, weight: 90 }],
+      },
+      {
+        role: "package",
+        patterns: [{ pattern: /^package$|work package/, weight: 90 }],
+      },
+      {
+        role: "location",
+        patterns: [{ pattern: /^location$|work location/, weight: 90 }],
+      },
+      {
+        role: "zone",
+        patterns: [{ pattern: /^zone$|work zone/, weight: 90 }],
+      },
+      {
+        role: "costCode",
+        patterns: [{ pattern: /^cost code$|activity code|wbs code/, weight: 90 }],
+      },
+      {
+        role: "activity",
+        patterns: [
+          { pattern: /^activity$/, weight: 120 },
+          { pattern: /assigned activity|activity name|work activity/, weight: 110 },
+          { pattern: /\bactivity\b/, weight: 90 },
+          { pattern: /^task$|task name/, weight: 80 },
+          { pattern: /work item|work description/, weight: 75 },
+          { pattern: /^description$/, weight: 55 },
+        ],
+      },
+      {
+        role: "discipline",
+        patterns: [{ pattern: /^discipline$|work discipline/, weight: 90 }],
+      },
+    ];
+
+    roleDefinitions.forEach((definition) => {
+      const column = chooseColumn(columns, definition.patterns, used);
+      if (!column) return;
+      selected.push({ ...column, role: definition.role, kind: "context", displayLabel: column.label });
+      used.add(column.originalIndex);
+    });
+
+    columns.forEach((column) => {
+      if (used.has(column.originalIndex)) return;
+      const manday = classifyMandayColumn(column);
+      if (!manday) return;
+      selected.push(manday);
+      used.add(column.originalIndex);
+    });
+
+    if (!selected.some((column) => column.role === "activity")) {
+      throw new Error("No Activity column was found in QTY_Sheet.");
     }
-    const progress = rowProgress(row);
-    if (progress === null) return "Recorded";
-    if (progress >= 99.5) return "Complete";
-    if (progress > 0) return "In progress";
-    return "Not started";
+    if (!selected.some((column) => column.role === "manday")) {
+      throw new Error("No manday or recognised trade columns were found in QTY_Sheet.");
+    }
+    return selected;
   }
 
-  function countBy(rows, valueForRow) {
-    const counts = new Map();
-    rows.forEach((row) => {
-      const value = String(valueForRow(row) || "Not specified").trim() || "Not specified";
-      counts.set(value, (counts.get(value) || 0) + 1);
+  function buildModel() {
+    const roleIndex = (role) => state.columns.findIndex((column) => column.role === role);
+    const tradeIndexes = [];
+    const genericMandayIndexes = [];
+    let totalMandayIndex = -1;
+
+    state.columns.forEach((column, index) => {
+      if (column.role !== "manday") return;
+      if (column.kind === "total" && totalMandayIndex < 0) totalMandayIndex = index;
+      else if (column.kind === "trade") tradeIndexes.push(index);
+      else if (column.kind === "generic") genericMandayIndexes.push(index);
     });
-    return [...counts.entries()]
+
+    const locationPriority = ["villa", "area", "cluster", "location", "section", "zone", "package"];
+    const locationRole = locationPriority.find((role) => roleIndex(role) >= 0) || null;
+    return {
+      activityIndex: roleIndex("activity"),
+      locationIndex: locationRole ? roleIndex(locationRole) : -1,
+      locationRole,
+      tradeIndexes,
+      genericMandayIndexes,
+      totalMandayIndex,
+      contextIndexes: state.columns
+        .map((column, index) => (column.kind === "context" ? index : -1))
+        .filter((index) => index >= 0),
+    };
+  }
+
+  function rowMandays(row, selectedTrade = "") {
+    if (selectedTrade) {
+      const index = state.columns.findIndex(
+        (column) => column.role === "manday" && column.displayLabel === selectedTrade,
+      );
+      return Math.max(0, numberValue(rawCell(row, index)) || 0);
+    }
+
+    if (state.model.totalMandayIndex >= 0) {
+      const total = numberValue(rawCell(row, state.model.totalMandayIndex));
+      if (total !== null) return Math.max(0, total);
+    }
+
+    const indexes = state.model.tradeIndexes.length
+      ? state.model.tradeIndexes
+      : state.model.genericMandayIndexes;
+    return indexes.reduce(
+      (sum, index) => sum + Math.max(0, numberValue(rawCell(row, index)) || 0),
+      0,
+    );
+  }
+
+  function countBy(rows, labelForRow, valueForRow) {
+    const values = new Map();
+    rows.forEach((row) => {
+      const label = String(labelForRow(row) || "Unassigned").trim() || "Unassigned";
+      values.set(label, (values.get(label) || 0) + valueForRow(row));
+    });
+    return [...values.entries()]
       .map(([label, value]) => ({ label, value }))
       .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
   }
 
-  function setLoading(isLoading) {
-    elements.refreshButton.disabled = isLoading;
-    elements.refreshButton.classList.toggle("is-loading", isLoading);
-    if (isLoading) {
-      elements.syncStatus.textContent = "Connecting to Google Sheets…";
+  function setLoading(loading) {
+    elements.refreshButton.disabled = loading;
+    elements.refreshButton.classList.toggle("is-loading", loading);
+    if (loading) {
+      elements.syncStatus.textContent = "Loading QTY_Sheet…";
       elements.syncDot.classList.remove("is-live", "is-error");
     }
   }
 
-  function clearDataScript() {
-    if (state.timeoutId) window.clearTimeout(state.timeoutId);
-    state.timeoutId = null;
-    if (state.loadingScript) state.loadingScript.remove();
-    state.loadingScript = null;
-  }
-
-  function loadSheet() {
-    clearDataScript();
+  async function loadSheet() {
+    if (elements.refreshButton.classList.contains("is-loading")) return;
     setLoading(true);
     elements.errorPanel.hidden = true;
+    try {
+      const metadata = await querySheet("select * limit 0");
+      state.selectedDefinitions = selectSafeColumns(metadata.cols || []);
+      const selectedLetters = state.selectedDefinitions
+        .map((column) => columnLetter(column.originalIndex))
+        .join(",");
+      const table = await querySheet(`select ${selectedLetters}`);
 
-    if (!config.spreadsheetId) {
-      showError("The spreadsheet ID is missing from the dashboard configuration.");
-      return;
+      state.columns = state.selectedDefinitions.map((definition, index) => ({
+        ...definition,
+        type: table.cols?.[index]?.type || definition.type || "string",
+        label: definition.displayLabel || definition.label,
+      }));
+      state.rows = (table.rows || [])
+        .map((row, rowIndex) => ({
+          id: rowIndex,
+          cells: state.columns.map((_, columnIndex) => ({
+            value: row.c?.[columnIndex]?.v ?? null,
+            formatted: row.c?.[columnIndex]?.f ?? null,
+          })),
+        }))
+        .filter((row) => row.cells.some((cell) => cell.value !== null && cell.value !== ""));
+      state.model = buildModel();
+      state.page = 1;
+      populateFilters();
+      applyFilters();
+      elements.syncDot.classList.add("is-live");
+      elements.syncDot.classList.remove("is-error");
+      elements.syncStatus.textContent = `Updated ${new Intl.DateTimeFormat(config.locale || "en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: config.timeZone || undefined,
+      }).format(new Date())}`;
+    } catch (error) {
+      showError(error.message || "QTY_Sheet could not be read.");
+    } finally {
+      setLoading(false);
     }
-
-    const callbackName = `__sheetDashboardResponse_${Date.now()}`;
-    window[callbackName] = function (response) {
-      delete window[callbackName];
-      clearDataScript();
-      handleSheetResponse(response);
-    };
-
-    const params = new URLSearchParams();
-    if (config.sheetName) params.set("sheet", config.sheetName);
-    else params.set("gid", String(config.gid ?? "0"));
-    params.set("headers", String(config.headers ?? 1));
-    params.set("tq", "select *");
-    params.set(
-      "tqx",
-      `out:json;responseHandler:${callbackName};reqId:${Date.now()}`,
-    );
-
-    const script = document.createElement("script");
-    script.src = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(
-      config.spreadsheetId,
-    )}/gviz/tq?${params.toString()}`;
-    script.async = true;
-    script.onerror = function () {
-      delete window[callbackName];
-      clearDataScript();
-      showError(
-        "The sheet did not respond. Confirm that General access is set to “Anyone with the link” with the Viewer role.",
-      );
-    };
-    state.loadingScript = script;
-    document.head.appendChild(script);
-
-    state.timeoutId = window.setTimeout(() => {
-      delete window[callbackName];
-      clearDataScript();
-      showError("The connection timed out. Check the sheet sharing settings, then try again.");
-    }, 18000);
-  }
-
-  function handleSheetResponse(response) {
-    if (!response || response.status === "error" || !response.table) {
-      const details = response?.errors?.map((error) => error.message).filter(Boolean).join(" ");
-      showError(details || "Google did not return readable sheet data.");
-      return;
-    }
-
-    state.columns = (response.table.cols || []).map((column, index) => ({
-      ...column,
-      label: displayLabel(column, index),
-    }));
-    state.rows = (response.table.rows || [])
-      .map((row, rowIndex) => ({
-        id: rowIndex,
-        cells: state.columns.map((_, columnIndex) => {
-          const cell = row.c?.[columnIndex] || null;
-          return {
-            value: cell?.v ?? null,
-            formatted: cell?.f ?? null,
-          };
-        }),
-      }))
-      .filter((row) => row.cells.some((cell) => cell.value !== null && cell.value !== ""));
-
-    state.model = detectModel();
-    state.page = 1;
-    populateFilters();
-    applyFilters();
-    setLoading(false);
-    elements.errorPanel.hidden = true;
-    elements.syncDot.classList.add("is-live");
-    elements.syncDot.classList.remove("is-error");
-    elements.syncStatus.textContent = `Updated ${new Intl.DateTimeFormat(config.locale || "en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: config.timeZone || undefined,
-    }).format(new Date())}`;
   }
 
   function showError(message) {
-    setLoading(false);
     elements.errorMessage.textContent = message;
     elements.errorPanel.hidden = false;
     elements.chartGrid.hidden = true;
     elements.tablePanel.hidden = true;
     elements.emptyPanel.hidden = true;
+    elements.recordSummary.textContent = "No assignment data loaded";
     elements.syncDot.classList.remove("is-live");
     elements.syncDot.classList.add("is-error");
-    elements.syncStatus.textContent = "Sheet connection unavailable";
-    elements.recordSummary.textContent = "No data loaded";
+    elements.syncStatus.textContent = "QTY_Sheet unavailable";
     renderKpis([
-      { label: "Records", value: "—", note: "Waiting for sheet access", color: "#f58a07" },
-      { label: "Columns", value: "—", note: "Waiting for sheet access", color: "#2f6fed" },
-      { label: "Progress", value: "—", note: "Waiting for sheet access", color: "#0f8f83" },
-      { label: "Latest update", value: "—", note: "Waiting for sheet access", color: "#7b61c9" },
+      { label: "Assigned mandays", value: "—", note: "Waiting for QTY_Sheet", color: "#f58a07" },
+      { label: "Activities", value: "—", note: "Waiting for QTY_Sheet", color: "#0f8f83" },
+      { label: "Assignments", value: "—", note: "Waiting for QTY_Sheet", color: "#2f6fed" },
+      { label: "Locations", value: "—", note: "Waiting for QTY_Sheet", color: "#7b61c9" },
     ]);
   }
 
   function populateSelect(select, values, allLabel) {
     const previous = select.value;
     select.replaceChildren();
-    const all = document.createElement("option");
-    all.value = "";
-    all.textContent = allLabel;
-    select.appendChild(all);
+    const first = document.createElement("option");
+    first.value = "";
+    first.textContent = allLabel;
+    select.appendChild(first);
     values.forEach((value) => {
       const option = document.createElement("option");
       option.value = value;
@@ -402,67 +451,65 @@
     select.value = values.includes(previous) ? previous : "";
   }
 
+  function uniqueValues(index) {
+    if (index < 0) return [];
+    return [...new Set(state.rows.map((row) => displayCell(row, index)).filter((value) => value !== "—"))]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }
+
   function populateFilters() {
-    const { categoryIndex, statusIndex, progressIndex } = state.model;
+    const activities = uniqueValues(state.model.activityIndex);
+    populateSelect(elements.activityFilter, activities, "All activities");
+    elements.activityWrap.hidden = activities.length < 2;
 
-    if (categoryIndex >= 0) {
-      const values = [
-        ...new Set(
-          state.rows
-            .map((row) => formattedCell(row, categoryIndex))
-            .filter((value) => value && value !== "—"),
-        ),
-      ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-      const label = state.columns[categoryIndex].label;
-      elements.categoryLabel.textContent = label;
-      populateSelect(elements.categoryFilter, values, `All ${label.toLowerCase()}`);
-      elements.categoryWrap.hidden = values.length < 2;
+    if (state.model.locationIndex >= 0) {
+      const locations = uniqueValues(state.model.locationIndex);
+      const label = state.columns[state.model.locationIndex].label;
+      elements.locationLabel.textContent = label;
+      populateSelect(elements.locationFilter, locations, `All ${label.toLowerCase()}`);
+      elements.locationWrap.hidden = locations.length < 2;
     } else {
-      elements.categoryWrap.hidden = true;
+      elements.locationWrap.hidden = true;
     }
 
-    if (statusIndex >= 0 || progressIndex >= 0) {
-      const statuses = [...new Set(state.rows.map(rowStatus))].sort();
-      populateSelect(elements.statusFilter, statuses, "All statuses");
-      elements.statusWrap.hidden = statuses.length < 2;
-    } else {
-      elements.statusWrap.hidden = true;
-    }
+    const tradeLabels = [...new Set(
+      [...state.model.tradeIndexes, ...state.model.genericMandayIndexes]
+        .map((index) => state.columns[index].displayLabel)
+        .filter(Boolean),
+    )];
+    populateSelect(elements.tradeFilter, tradeLabels, "All trades");
+    elements.tradeWrap.hidden = tradeLabels.length < 2;
   }
 
   function applyFilters() {
     const query = elements.searchInput.value.trim().toLowerCase();
-    const selectedCategory = elements.categoryFilter.value;
-    const selectedStatus = elements.statusFilter.value;
-    const { categoryIndex } = state.model;
+    const activity = elements.activityFilter.value;
+    const location = elements.locationFilter.value;
+    const trade = elements.tradeFilter.value;
 
     state.filteredRows = state.rows.filter((row) => {
-      if (
-        selectedCategory &&
-        categoryIndex >= 0 &&
-        formattedCell(row, categoryIndex) !== selectedCategory
-      ) {
-        return false;
-      }
-      if (selectedStatus && rowStatus(row) !== selectedStatus) return false;
+      if (activity && displayCell(row, state.model.activityIndex) !== activity) return false;
+      if (location && displayCell(row, state.model.locationIndex) !== location) return false;
+      if (trade && rowMandays(row, trade) <= 0) return false;
       if (query) {
-        const haystack = row.cells
-          .map((_, index) => formattedCell(row, index))
+        const searchable = state.model.contextIndexes
+          .map((index) => displayCell(row, index))
           .join(" ")
           .toLowerCase();
-        if (!haystack.includes(query)) return false;
+        if (!searchable.includes(query)) return false;
       }
       return true;
     });
 
-    const totalPages = Math.max(1, Math.ceil(state.filteredRows.length / PAGE_SIZE));
-    state.page = Math.min(state.page, totalPages);
-    elements.clearFilters.hidden = !(query || selectedCategory || selectedStatus);
-    elements.recordSummary.textContent =
-      state.filteredRows.length === state.rows.length
-        ? `${formatNumber(state.rows.length, 0)} records loaded from ${formatNumber(state.columns.length, 0)} columns`
-        : `${formatNumber(state.filteredRows.length, 0)} of ${formatNumber(state.rows.length, 0)} records shown`;
-
+    state.page = Math.min(
+      state.page,
+      Math.max(1, Math.ceil(state.filteredRows.length / PAGE_SIZE)),
+    );
+    const hasFilters = Boolean(query || activity || location || trade);
+    elements.clearFilters.hidden = !hasFilters;
+    elements.recordSummary.textContent = hasFilters
+      ? `${formatNumber(state.filteredRows.length, 0)} of ${formatNumber(state.rows.length, 0)} assignments shown`
+      : `${formatNumber(state.rows.length, 0)} assignments loaded from QTY_Sheet`;
     renderDashboard();
   }
 
@@ -474,90 +521,61 @@
       elements.emptyPanel.hidden = false;
       return;
     }
-
     elements.emptyPanel.hidden = true;
     elements.chartGrid.hidden = false;
     elements.tablePanel.hidden = false;
-    renderStatusChart();
-    renderCategoryChart();
-    renderTrendChart();
+    renderTradeChart();
+    renderActivityChart();
+    renderLocationChart();
     renderTable();
   }
 
   function renderKpiSummary() {
-    const rows = state.filteredRows;
-    const progressValues = rows.map(rowProgress).filter((value) => value !== null);
-    const averageProgress = progressValues.length
-      ? progressValues.reduce((sum, value) => sum + value, 0) / progressValues.length
-      : null;
-    const statuses = rows.map(rowStatus);
-    const completed = statuses.filter((status) => status === "Complete").length;
-    const dates = rows
-      .map((row) => parseDate(rawCell(row, state.model.dateIndex)))
-      .filter(Boolean)
-      .sort((a, b) => b - a);
-
-    const secondMetric =
-      state.model.statusIndex >= 0 || progressValues.length
-        ? {
-            label: "Complete",
-            value: formatNumber(completed, 0),
-            note: rows.length ? `${formatNumber((completed / rows.length) * 100)}% of visible records` : "No records",
-            color: "#0f8f83",
-          }
-        : {
-            label: "Columns",
-            value: formatNumber(state.columns.length, 0),
-            note: "Fields available in the sheet",
-            color: "#2f6fed",
-          };
-
-    const thirdMetric =
-      averageProgress !== null
-        ? {
-            label: "Average progress",
-            value: `${formatNumber(averageProgress)}%`,
-            note: "Across visible records",
-            color: "#2f6fed",
-          }
-        : numericMetric(rows);
+    const trade = elements.tradeFilter.value;
+    const totalMandays = state.filteredRows.reduce((sum, row) => sum + rowMandays(row, trade), 0);
+    const activities = new Set(
+      state.filteredRows
+        .map((row) => displayCell(row, state.model.activityIndex))
+        .filter((value) => value !== "—"),
+    );
+    const locations = new Set(
+      state.filteredRows
+        .map((row) => displayCell(row, state.model.locationIndex))
+        .filter((value) => value !== "—"),
+    );
+    const tradeCount = [...state.model.tradeIndexes, ...state.model.genericMandayIndexes]
+      .filter((index) => state.filteredRows.some((row) => (numberValue(rawCell(row, index)) || 0) > 0))
+      .length;
 
     renderKpis([
       {
-        label: "Records",
-        value: formatNumber(rows.length, 0),
-        note: rows.length === state.rows.length ? "All sheet records" : `Filtered from ${formatNumber(state.rows.length, 0)}`,
+        label: trade ? `${trade} mandays` : "Assigned mandays",
+        value: formatNumber(totalMandays),
+        note: "Total across visible assignments",
         color: "#f58a07",
       },
-      secondMetric,
-      thirdMetric,
       {
-        label: dates.length ? "Latest update" : "Data source",
-        value: dates.length ? formatDate(dates[0], true) : "Live",
-        note: dates.length ? "Most recent visible date" : "Connected to Google Sheets",
+        label: "Activities assigned",
+        value: formatNumber(activities.size, 0),
+        note: "Distinct visible activities",
+        color: "#0f8f83",
+      },
+      {
+        label: "Assignment rows",
+        value: formatNumber(state.filteredRows.length, 0),
+        note: "Visible QTY_Sheet entries",
+        color: "#2f6fed",
+      },
+      {
+        label: state.model.locationIndex >= 0 ? "Locations" : "Active trades",
+        value: formatNumber(state.model.locationIndex >= 0 ? locations.size : tradeCount, 0),
+        note:
+          state.model.locationIndex >= 0
+            ? state.columns[state.model.locationIndex].label
+            : "Trades with assigned mandays",
         color: "#7b61c9",
       },
     ]);
-  }
-
-  function numericMetric(rows) {
-    const numericIndex = state.columns.findIndex((column) => column.type === "number");
-    if (numericIndex < 0) {
-      return {
-        label: "Visible fields",
-        value: formatNumber(state.columns.length, 0),
-        note: "Columns in the source sheet",
-        color: "#2f6fed",
-      };
-    }
-    const values = rows.map((row) => numberValue(rawCell(row, numericIndex))).filter((value) => value !== null);
-    const sum = values.reduce((total, value) => total + value, 0);
-    return {
-      label: state.columns[numericIndex].label,
-      value: formatNumber(sum),
-      note: "Total across visible records",
-      color: "#2f6fed",
-    };
   }
 
   function renderKpis(metrics) {
@@ -566,7 +584,6 @@
       const card = document.createElement("article");
       card.className = "kpi-card";
       card.style.setProperty("--kpi-color", metric.color);
-
       const label = document.createElement("span");
       label.className = "kpi-label";
       label.textContent = metric.label;
@@ -576,83 +593,144 @@
       const note = document.createElement("i");
       note.className = "kpi-note";
       note.textContent = metric.note;
-
       card.append(label, value, note);
       elements.kpiGrid.appendChild(card);
     });
   }
 
-  function renderStatusChart() {
-    const counts = countBy(state.filteredRows, rowStatus).slice(0, 6);
-    const total = counts.reduce((sum, item) => sum + item.value, 0);
-    elements.statusChart.replaceChildren();
-    elements.statusChartTitle.textContent = state.model.statusIndex >= 0 ? "Status overview" : "Progress stages";
+  function renderTradeChart() {
+    elements.tradeChart.replaceChildren();
+    const selectedTrade = elements.tradeFilter.value;
+    const indexes = selectedTrade
+      ? state.columns
+          .map((column, index) =>
+            column.role === "manday" && column.displayLabel === selectedTrade ? index : -1,
+          )
+          .filter((index) => index >= 0)
+      : [...state.model.tradeIndexes, ...state.model.genericMandayIndexes];
+    const items = indexes
+      .map((index) => ({
+        label: state.columns[index].displayLabel,
+        value: state.filteredRows.reduce(
+          (sum, row) => sum + Math.max(0, numberValue(rawCell(row, index)) || 0),
+          0,
+        ),
+      }))
+      .filter((item) => item.value > 0)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+    const total = items.reduce((sum, item) => sum + item.value, 0);
 
     if (!total) {
-      renderChartEmpty(elements.statusChart, "No status values to chart.");
+      renderChartEmpty(elements.tradeChart, "No trade mandays match these filters.");
       return;
     }
 
     let current = 0;
-    const stops = counts.map((item, index) => {
+    const stops = items.map((item, index) => {
       const start = (current / total) * 100;
       current += item.value;
       const end = (current / total) * 100;
-      return `${CHART_COLORS[index]} ${start}% ${end}%`;
+      return `${CHART_COLORS[index % CHART_COLORS.length]} ${start}% ${end}%`;
     });
-
     const donut = document.createElement("div");
     donut.className = "donut";
     donut.style.setProperty("--donut-stops", stops.join(", "));
     donut.setAttribute("role", "img");
     donut.setAttribute(
       "aria-label",
-      counts.map((item) => `${item.label}: ${item.value}`).join(", "),
+      items.map((item) => `${item.label}: ${formatNumber(item.value)} mandays`).join(", "),
     );
     const center = document.createElement("div");
     center.className = "donut-center";
-    const totalText = document.createElement("strong");
-    totalText.textContent = formatNumber(total, 0);
-    const totalLabel = document.createElement("span");
-    totalLabel.textContent = "records";
-    center.append(totalText, totalLabel);
+    const strong = document.createElement("strong");
+    strong.textContent = formatNumber(total);
+    const caption = document.createElement("span");
+    caption.textContent = "mandays";
+    center.append(strong, caption);
     donut.appendChild(center);
 
     const legend = document.createElement("ul");
     legend.className = "legend";
-    counts.forEach((item, index) => {
+    items.forEach((item, index) => {
       const li = document.createElement("li");
       const dot = document.createElement("span");
       dot.className = "legend-dot";
-      dot.style.setProperty("--legend-color", CHART_COLORS[index]);
+      dot.style.setProperty("--legend-color", CHART_COLORS[index % CHART_COLORS.length]);
       const label = document.createElement("span");
       label.className = "legend-name";
       label.textContent = item.label;
       const value = document.createElement("span");
       value.className = "legend-value";
-      value.textContent = `${formatNumber(item.value, 0)} · ${formatNumber((item.value / total) * 100)}%`;
+      value.textContent = formatNumber(item.value);
       li.append(dot, label, value);
       legend.appendChild(li);
     });
-
-    elements.statusChart.append(donut, legend);
+    elements.tradeChart.append(donut, legend);
   }
 
-  function renderCategoryChart() {
-    const categoryIndex = state.model.categoryIndex;
-    elements.categoryChart.replaceChildren();
-    if (categoryIndex < 0) {
-      elements.categoryChartTitle.textContent = "Records by category";
-      renderChartEmpty(elements.categoryChart, "Add a text category column to see this breakdown.");
+  function renderActivityChart() {
+    elements.activityChart.replaceChildren();
+    const trade = elements.tradeFilter.value;
+    const items = countBy(
+      state.filteredRows,
+      (row) => displayCell(row, state.model.activityIndex),
+      (row) => rowMandays(row, trade),
+    )
+      .filter((item) => item.value > 0)
+      .slice(0, 10);
+    renderBars(elements.activityChart, items, "No assigned mandays match these activities.");
+  }
+
+  function renderLocationChart() {
+    if (state.model.locationIndex < 0) {
+      elements.locationPanel.hidden = true;
+      return;
+    }
+    const trade = elements.tradeFilter.value;
+    const items = countBy(
+      state.filteredRows,
+      (row) => displayCell(row, state.model.locationIndex),
+      (row) => rowMandays(row, trade),
+    )
+      .filter((item) => item.value > 0)
+      .slice(0, 14);
+    if (!items.length) {
+      elements.locationPanel.hidden = true;
       return;
     }
 
-    const columnLabel = state.columns[categoryIndex].label;
-    const counts = countBy(state.filteredRows, (row) => formattedCell(row, categoryIndex)).slice(0, 8);
-    const maximum = Math.max(...counts.map((item) => item.value), 1);
-    elements.categoryChartTitle.textContent = `Records by ${columnLabel}`;
+    elements.locationPanel.hidden = false;
+    elements.locationTitle.textContent = `Mandays by ${state.columns[state.model.locationIndex].label}`;
+    elements.locationCaption.textContent = `Top ${items.length}`;
+    elements.locationChart.replaceChildren();
+    const bars = document.createElement("div");
+    bars.className = "trend-bars";
+    const maximum = Math.max(...items.map((item) => item.value), 1);
+    items.forEach((item, index) => {
+      const wrapper = document.createElement("div");
+      wrapper.className = "trend-item";
+      wrapper.title = `${item.label}: ${formatNumber(item.value)} mandays`;
+      const column = document.createElement("span");
+      column.className = "trend-column";
+      column.style.height = `${Math.max(2, (item.value / maximum) * 100)}%`;
+      column.style.animationDelay = `${index * 30}ms`;
+      const label = document.createElement("span");
+      label.className = "trend-label";
+      label.textContent = item.label;
+      wrapper.append(column, label);
+      bars.appendChild(wrapper);
+    });
+    elements.locationChart.appendChild(bars);
+  }
 
-    counts.forEach((item, index) => {
+  function renderBars(container, items, emptyMessage) {
+    if (!items.length) {
+      renderChartEmpty(container, emptyMessage);
+      return;
+    }
+    const maximum = Math.max(...items.map((item) => item.value), 1);
+    items.forEach((item, index) => {
       const row = document.createElement("div");
       row.className = "bar-row";
       const label = document.createElement("span");
@@ -668,172 +746,100 @@
       track.appendChild(fill);
       const value = document.createElement("span");
       value.className = "bar-value";
-      value.textContent = formatNumber(item.value, 0);
+      value.textContent = formatNumber(item.value);
       row.append(label, track, value);
-      elements.categoryChart.appendChild(row);
+      container.appendChild(row);
     });
-  }
-
-  function renderTrendChart() {
-    const dateIndex = state.model.dateIndex;
-    if (dateIndex < 0) {
-      elements.trendPanel.hidden = true;
-      return;
-    }
-
-    const datedRows = state.filteredRows
-      .map((row) => ({ row, date: parseDate(rawCell(row, dateIndex)) }))
-      .filter((item) => item.date);
-    if (datedRows.length < 2) {
-      elements.trendPanel.hidden = true;
-      return;
-    }
-
-    const hasProgress = datedRows.some((item) => rowProgress(item.row) !== null);
-    const groups = new Map();
-    datedRows.forEach((item) => {
-      const key = `${item.date.getFullYear()}-${String(item.date.getMonth() + 1).padStart(2, "0")}-${String(
-        item.date.getDate(),
-      ).padStart(2, "0")}`;
-      if (!groups.has(key)) groups.set(key, { date: item.date, count: 0, progress: [] });
-      const group = groups.get(key);
-      group.count += 1;
-      const progress = rowProgress(item.row);
-      if (progress !== null) group.progress.push(progress);
-    });
-
-    const points = [...groups.values()]
-      .sort((a, b) => a.date - b.date)
-      .slice(-14)
-      .map((group) => ({
-        date: group.date,
-        value:
-          hasProgress && group.progress.length
-            ? group.progress.reduce((sum, value) => sum + value, 0) / group.progress.length
-            : group.count,
-      }));
-
-    if (points.length < 2) {
-      elements.trendPanel.hidden = true;
-      return;
-    }
-
-    elements.trendPanel.hidden = false;
-    elements.trendTitle.textContent = hasProgress ? "Average progress by date" : "Records by date";
-    elements.trendCaption.textContent = `Latest ${points.length} dates`;
-    elements.trendChart.replaceChildren();
-    const bars = document.createElement("div");
-    bars.className = "trend-bars";
-    const maximum = hasProgress ? 100 : Math.max(...points.map((point) => point.value), 1);
-
-    points.forEach((point, index) => {
-      const item = document.createElement("div");
-      item.className = "trend-item";
-      item.title = `${formatDate(point.date, true)}: ${formatNumber(point.value)}${hasProgress ? "%" : " records"}`;
-      const column = document.createElement("span");
-      column.className = "trend-column";
-      column.style.height = `${Math.max(2, (point.value / maximum) * 100)}%`;
-      column.style.animationDelay = `${index * 30}ms`;
-      const label = document.createElement("span");
-      label.className = "trend-label";
-      label.textContent = formatDate(point.date, false);
-      item.append(column, label);
-      bars.appendChild(item);
-    });
-    elements.trendChart.appendChild(bars);
-  }
-
-  function statusStyle(status) {
-    const key = normaliseLabel(status);
-    if (key === "complete") return { color: "#087468", background: "#def5f0" };
-    if (key === "in progress") return { color: "#235fc4", background: "#e5efff" };
-    if (key === "delayed") return { color: "#b43232", background: "#ffe8e8" };
-    if (key === "on hold") return { color: "#9c5a00", background: "#fff0d6" };
-    return { color: "#536b7e", background: "#edf2f6" };
   }
 
   function renderTable() {
     const totalPages = Math.max(1, Math.ceil(state.filteredRows.length / PAGE_SIZE));
     const start = (state.page - 1) * PAGE_SIZE;
     const pageRows = state.filteredRows.slice(start, start + PAGE_SIZE);
-    const visibleColumnIndexes = state.columns.map((_, index) => index).slice(0, 12);
+    const trade = elements.tradeFilter.value;
+    const selectedIndexes = trade
+      ? [
+          ...state.model.contextIndexes,
+          ...state.columns
+            .map((column, index) =>
+              column.role === "manday" && column.displayLabel === trade ? index : -1,
+            )
+            .filter((index) => index >= 0),
+        ]
+      : state.columns.map((_, index) => index);
 
     const thead = elements.table.querySelector("thead");
     const tbody = elements.table.querySelector("tbody");
     thead.replaceChildren();
     tbody.replaceChildren();
-
     const headerRow = document.createElement("tr");
-    visibleColumnIndexes.forEach((columnIndex) => {
+    selectedIndexes.forEach((index) => {
       const th = document.createElement("th");
       th.scope = "col";
-      th.textContent = state.columns[columnIndex].label;
+      th.textContent = state.columns[index].displayLabel || state.columns[index].label;
       headerRow.appendChild(th);
     });
+    if (state.model.totalMandayIndex < 0 || trade) {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = trade ? `${trade} Mandays` : "Total Mandays";
+      headerRow.appendChild(th);
+    }
     thead.appendChild(headerRow);
 
     pageRows.forEach((row) => {
       const tr = document.createElement("tr");
-      visibleColumnIndexes.forEach((columnIndex) => {
+      selectedIndexes.forEach((index) => {
         const td = document.createElement("td");
-        const value = formattedCell(row, columnIndex);
+        const value = displayCell(row, index);
+        td.textContent = value;
         td.title = value === "—" ? "" : value;
-        if (columnIndex === state.model.statusIndex) {
-          const status = rowStatus(row);
-          const style = statusStyle(status);
-          const pill = document.createElement("span");
-          pill.className = "status-pill";
-          pill.textContent = status;
-          pill.style.setProperty("--pill-color", style.color);
-          pill.style.setProperty("--pill-bg", style.background);
-          td.appendChild(pill);
-        } else {
-          td.textContent = value;
-        }
         tr.appendChild(td);
       });
+      if (state.model.totalMandayIndex < 0 || trade) {
+        const td = document.createElement("td");
+        td.textContent = formatNumber(rowMandays(row, trade));
+        tr.appendChild(td);
+      }
       tbody.appendChild(tr);
     });
 
-    elements.tableCount.textContent = `${formatNumber(state.filteredRows.length, 0)} visible records`;
+    elements.tableCount.textContent = `${formatNumber(state.filteredRows.length, 0)} visible assignments`;
     elements.pageStatus.textContent = `Page ${state.page} of ${totalPages}`;
     elements.previousPage.disabled = state.page <= 1;
     elements.nextPage.disabled = state.page >= totalPages;
   }
 
   function renderChartEmpty(container, message) {
-    const empty = document.createElement("p");
-    empty.className = "chart-empty";
-    empty.textContent = message;
-    container.appendChild(empty);
+    const paragraph = document.createElement("p");
+    paragraph.className = "chart-empty";
+    paragraph.textContent = message;
+    container.appendChild(paragraph);
   }
 
   function clearFilters() {
     elements.searchInput.value = "";
-    elements.categoryFilter.value = "";
-    elements.statusFilter.value = "";
+    elements.activityFilter.value = "";
+    elements.locationFilter.value = "";
+    elements.tradeFilter.value = "";
     state.page = 1;
     applyFilters();
   }
 
   function initialise() {
-    document.title = config.title || "Project Progress Dashboard";
-    elements.title.textContent = config.title || "Project Progress Dashboard";
-    elements.sourceLink.href = config.sourceUrl || `https://docs.google.com/spreadsheets/d/${config.spreadsheetId}/edit`;
-
+    document.title = config.title || "Mandays & Assigned Activities";
+    elements.title.textContent = config.title || "Mandays & Assigned Activities";
     elements.refreshButton.addEventListener("click", loadSheet);
     elements.retryButton.addEventListener("click", loadSheet);
     elements.searchInput.addEventListener("input", () => {
       state.page = 1;
       applyFilters();
     });
-    elements.categoryFilter.addEventListener("change", () => {
-      state.page = 1;
-      applyFilters();
-    });
-    elements.statusFilter.addEventListener("change", () => {
-      state.page = 1;
-      applyFilters();
+    [elements.activityFilter, elements.locationFilter, elements.tradeFilter].forEach((select) => {
+      select.addEventListener("change", () => {
+        state.page = 1;
+        applyFilters();
+      });
     });
     elements.clearFilters.addEventListener("click", clearFilters);
     elements.previousPage.addEventListener("click", () => {
@@ -852,7 +858,9 @@
     loadSheet();
     const refreshMs = Number(config.refreshMinutes) * 60 * 1000;
     if (Number.isFinite(refreshMs) && refreshMs >= 60000) {
-      window.setInterval(loadSheet, refreshMs);
+      window.setInterval(() => {
+        if (!document.hidden) loadSheet();
+      }, refreshMs);
     }
   }
 

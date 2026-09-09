@@ -6,9 +6,9 @@
     <meta name="theme-color" content="#102a43" />
     <meta
       name="description"
-      content="A read-only project dashboard connected to Google Sheets."
+      content="A read-only dashboard for assigned activities and mandays from QTY_Sheet."
     />
-    <title>Project Progress Dashboard</title>
+    <title>Mandays &amp; Assigned Activities</title>
     <link rel="stylesheet" href="./styles.css" />
     <script src="./config.js" defer></script>
     <script src="./app.js" defer></script>
@@ -22,8 +22,8 @@
           <span></span><span></span><span></span>
         </div>
         <div>
-          <p class="eyebrow">LIVE PROJECT DATA</p>
-          <h1 id="dashboard-title">Project Progress Dashboard</h1>
+          <p class="eyebrow">QTY_SHEET · VIEW ONLY</p>
+          <h1 id="dashboard-title">Mandays &amp; Assigned Activities</h1>
         </div>
       </div>
 
@@ -32,9 +32,7 @@
           <span class="sync-dot" aria-hidden="true"></span>
           <span id="sync-status">Connecting to Google Sheets…</span>
         </div>
-        <a id="source-link" class="source-link" href="#" target="_blank" rel="noreferrer">
-          Open source sheet
-        </a>
+        <span class="sheet-badge">Safe fields only</span>
         <button id="refresh-button" class="refresh-button" type="button" disabled>
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M20 11a8.1 8.1 0 0 0-15.5-3M4 4v4h4M4 13a8.1 8.1 0 0 0 15.5 3M20 20v-4h-4" />
@@ -58,16 +56,23 @@
         </label>
 
         <label id="category-filter-wrap" class="select-field" hidden>
-          <span id="category-filter-label">Category</span>
+          <span id="category-filter-label">Activity</span>
           <select id="category-filter">
-            <option value="">All categories</option>
+            <option value="">All activities</option>
           </select>
         </label>
 
-        <label id="status-filter-wrap" class="select-field" hidden>
-          <span>Status</span>
-          <select id="status-filter">
-            <option value="">All statuses</option>
+        <label id="location-filter-wrap" class="select-field" hidden>
+          <span id="location-filter-label">Location</span>
+          <select id="location-filter">
+            <option value="">All locations</option>
+          </select>
+        </label>
+
+        <label id="trade-filter-wrap" class="select-field" hidden>
+          <span>Trade</span>
+          <select id="trade-filter">
+            <option value="">All trades</option>
           </select>
         </label>
 
@@ -78,9 +83,9 @@
       <section id="error-panel" class="error-panel" role="alert" hidden>
         <div class="error-icon" aria-hidden="true">!</div>
         <div>
-          <h2>Google Sheet could not be read</h2>
+          <h2>QTY_Sheet could not be read</h2>
           <p id="error-message">
-            Confirm that General access is set to “Anyone with the link” and the role is “Viewer.”
+            Confirm that QTY_Sheet exists and can be viewed through the shared spreadsheet.
           </p>
         </div>
         <button id="retry-button" type="button">Try again</button>
@@ -98,7 +103,7 @@
           <div class="panel-heading">
             <div>
               <p class="panel-kicker">BREAKDOWN</p>
-              <h2 id="status-chart-title">Status overview</h2>
+              <h2 id="status-chart-title">Mandays by trade</h2>
             </div>
           </div>
           <div id="status-chart" class="status-chart"></div>
@@ -108,7 +113,7 @@
           <div class="panel-heading">
             <div>
               <p class="panel-kicker">DISTRIBUTION</p>
-              <h2 id="category-chart-title">Records by category</h2>
+              <h2 id="category-chart-title">Mandays by activity</h2>
             </div>
           </div>
           <div id="category-chart" class="bar-chart"></div>
@@ -117,8 +122,8 @@
         <article id="trend-panel" class="panel trend-panel" hidden>
           <div class="panel-heading">
             <div>
-              <p class="panel-kicker">TIMELINE</p>
-              <h2 id="trend-chart-title">Activity over time</h2>
+              <p class="panel-kicker">LOCATION</p>
+              <h2 id="trend-chart-title">Mandays by location</h2>
             </div>
             <span id="trend-caption" class="panel-caption"></span>
           </div>
@@ -130,7 +135,7 @@
         <div class="panel-heading table-heading">
           <div>
             <p class="panel-kicker">DETAILS</p>
-            <h2>Sheet records</h2>
+            <h2>Activity assignments</h2>
           </div>
           <p id="table-count" class="panel-caption"></p>
         </div>
@@ -156,7 +161,7 @@
     <footer>
       <span>Read-only dashboard</span>
       <span aria-hidden="true">•</span>
-      <span>Source data stays in Google Sheets</span>
+      <span>Only activity, location and manday fields are loaded</span>
     </footer>
   </body>
 </html>

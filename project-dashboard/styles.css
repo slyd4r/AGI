@@ -106,7 +106,7 @@ select:focus-visible {
 .topbar-actions,
 .sync-copy,
 .refresh-button,
-.source-link {
+.sheet-badge {
   position: relative;
   z-index: 1;
 }
@@ -204,7 +204,7 @@ h1 {
   box-shadow: 0 0 0 4px rgba(255, 125, 125, 0.13);
 }
 
-.source-link,
+.sheet-badge,
 .refresh-button {
   min-height: 42px;
   padding: 10px 14px;
@@ -234,7 +234,6 @@ h1 {
   stroke-width: 2;
 }
 
-.source-link:hover,
 .refresh-button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.15);
   transform: translateY(-1px);
@@ -257,7 +256,7 @@ h1 {
 
 .filter-panel {
   display: grid;
-  grid-template-columns: minmax(240px, 1.6fr) repeat(2, minmax(170px, 0.7fr)) auto;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(150px, 0.7fr)) auto;
   align-items: end;
   gap: 14px;
   padding: 18px;
@@ -897,7 +896,7 @@ footer {
     justify-content: flex-start;
   }
 
-  .source-link,
+  .sheet-badge,
   .refresh-button {
     flex: 1;
     text-align: center;
