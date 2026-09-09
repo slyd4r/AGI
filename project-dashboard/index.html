@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#102a43" />
+    <meta
+      name="description"
+      content="A read-only project dashboard connected to Google Sheets."
+    />
+    <title>Project Progress Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./config.js" defer></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to dashboard</a>
+
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div>
+          <p class="eyebrow">LIVE PROJECT DATA</p>
+          <h1 id="dashboard-title">Project Progress Dashboard</h1>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <div class="sync-copy" aria-live="polite">
+          <span class="sync-dot" aria-hidden="true"></span>
+          <span id="sync-status">Connecting to Google Sheets…</span>
+        </div>
+        <a id="source-link" class="source-link" href="#" target="_blank" rel="noreferrer">
+          Open source sheet
+        </a>
+        <button id="refresh-button" class="refresh-button" type="button" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11a8.1 8.1 0 0 0-15.5-3M4 4v4h4M4 13a8.1 8.1 0 0 0 15.5 3M20 20v-4h-4" />
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <main id="main-content" class="dashboard-shell">
+      <section class="filter-panel" aria-label="Dashboard filters">
+        <label class="search-field">
+          <span>Search records</span>
+          <span class="input-wrap">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"></circle>
+              <path d="m20 20-3.5-3.5"></path>
+            </svg>
+            <input id="search-input" type="search" placeholder="Search any value…" autocomplete="off" />
+          </span>
+        </label>
+
+        <label id="category-filter-wrap" class="select-field" hidden>
+          <span id="category-filter-label">Category</span>
+          <select id="category-filter">
+            <option value="">All categories</option>
+          </select>
+        </label>
+
+        <label id="status-filter-wrap" class="select-field" hidden>
+          <span>Status</span>
+          <select id="status-filter">
+            <option value="">All statuses</option>
+          </select>
+        </label>
+
+        <button id="clear-filters" class="clear-button" type="button" hidden>Clear filters</button>
+        <p id="record-summary" class="record-summary">Preparing the dashboard…</p>
+      </section>
+
+      <section id="error-panel" class="error-panel" role="alert" hidden>
+        <div class="error-icon" aria-hidden="true">!</div>
+        <div>
+          <h2>Google Sheet could not be read</h2>
+          <p id="error-message">
+            Confirm that General access is set to “Anyone with the link” and the role is “Viewer.”
+          </p>
+        </div>
+        <button id="retry-button" type="button">Try again</button>
+      </section>
+
+      <section id="kpi-grid" class="kpi-grid" aria-label="Key metrics">
+        <article class="kpi-card skeleton-card"><span></span><strong></strong><i></i></article>
+        <article class="kpi-card skeleton-card"><span></span><strong></strong><i></i></article>
+        <article class="kpi-card skeleton-card"><span></span><strong></strong><i></i></article>
+        <article class="kpi-card skeleton-card"><span></span><strong></strong><i></i></article>
+      </section>
+
+      <section id="chart-grid" class="chart-grid" aria-label="Dashboard charts" hidden>
+        <article class="panel status-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">BREAKDOWN</p>
+              <h2 id="status-chart-title">Status overview</h2>
+            </div>
+          </div>
+          <div id="status-chart" class="status-chart"></div>
+        </article>
+
+        <article class="panel category-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">DISTRIBUTION</p>
+              <h2 id="category-chart-title">Records by category</h2>
+            </div>
+          </div>
+          <div id="category-chart" class="bar-chart"></div>
+        </article>
+
+        <article id="trend-panel" class="panel trend-panel" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">TIMELINE</p>
+              <h2 id="trend-chart-title">Activity over time</h2>
+            </div>
+            <span id="trend-caption" class="panel-caption"></span>
+          </div>
+          <div id="trend-chart" class="trend-chart"></div>
+        </article>
+      </section>
+
+      <section id="table-panel" class="panel table-panel" hidden>
+        <div class="panel-heading table-heading">
+          <div>
+            <p class="panel-kicker">DETAILS</p>
+            <h2>Sheet records</h2>
+          </div>
+          <p id="table-count" class="panel-caption"></p>
+        </div>
+        <div class="table-scroll">
+          <table id="data-table">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="pagination" aria-label="Table pages">
+          <button id="previous-page" type="button">Previous</button>
+          <span id="page-status">Page 1 of 1</span>
+          <button id="next-page" type="button">Next</button>
+        </div>
+      </section>
+
+      <section id="empty-panel" class="empty-panel" hidden>
+        <h2>No matching records</h2>
+        <p>Change or clear the filters to show the sheet data again.</p>
+      </section>
+    </main>
+
+    <footer>
+      <span>Read-only dashboard</span>
+      <span aria-hidden="true">•</span>
+      <span>Source data stays in Google Sheets</span>
+    </footer>
+  </body>
+</html>
